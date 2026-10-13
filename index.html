@@ -1,116 +1,244 @@
-<html>
-	<head>
-		<script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=default'></script>
-		<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
-		<style>
-			h1 {
-				text-align: center;
-			}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c2335">
+  <meta name="description" content="Ian Yang's UC Berkeley CS 184 Homework 2 write-up: Bézier curves and surfaces, area-weighted normals, half-edge mesh operations, and Loop subdivision.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="The Mesh Editor · CS 184 Homework 2 · Ian Yang">
+  <meta property="og:description" content="From six control points to smooth surfaces: geometric modeling, local mesh edits, and subdivision experiments.">
+  <meta property="og:url" content="https://cal-cs184-student.github.io/hw2-ian-cs184-writeup/">
+  <meta property="og:image" content="https://cal-cs184-student.github.io/hw2-ian-cs184-writeup/assets/title_img.png">
+  <title>The Mesh Editor — CS 184 Homework 2 · Ian Yang</title>
+  <link rel="canonical" href="https://cal-cs184-student.github.io/hw2-ian-cs184-writeup/">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body id="top">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="header-main">
+        <a class="brand" href="#top" aria-label="Ian Yang, back to top"><span class="monogram">IY<span>.</span></span><span class="brand-label">CS 184 <i>/</i> Computer Graphics &amp; Imaging</span></a>
+        <a class="header-cta" href="https://cs184.eecs.berkeley.edu/fa26/hw/hw2/">Assignment ↗</a>
+      </div>
+      <nav class="header-links" aria-label="Public URLs">
+        <a href="https://cal-cs184-student.github.io/hw2-ian-cs184-writeup/"><span>Webpage</span>https://cal-cs184-student.github.io/hw2-ian-cs184-writeup/</a>
+        <a href="https://github.com/cal-cs184-student/hw2-ian-cs184-writeup"><span>Repository</span>https://github.com/cal-cs184-student/hw2-ian-cs184-writeup</a>
+      </nav>
+    </div>
+  </header>
 
-			.container {
-				margin: 0 auto;
-				padding: 60px 20%;
-			}
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> UC Berkeley · Fall 2026</p>
+          <p class="kicker">HW 02</p>
+          <h1 id="hero-title">The<br><em>Mesh Editor</em></h1>
+          <p class="hero-author">Ian Yang</p>
+        </div>
+        <figure class="hero-figure">
+          <div class="hero-image"><img src="assets/title_img.png" alt="Supplied render of a humanoid model against a black background" width="633" height="502" fetchpriority="high"></div>
+        </figure>
+      </div>
+    </section>
 
-			figure {
-				text-align: center;
-			}
+    <div class="layout">
+      <aside class="sidebar" aria-label="Sections">
+        <div class="sidebar-inner">
+          <p class="sidebar-label">On this page</p>
+          <nav>
+            <a href="#overview" aria-current="location"><span>00</span> Overview</a>
+            <a href="#part-1"><span>01</span> Bézier curves</a>
+            <a href="#part-2"><span>02</span> Bézier surfaces</a>
+            <a href="#part-3"><span>03</span> Vertex normals</a>
+            <a href="#part-4"><span>04</span> Edge flip</a>
+            <a href="#part-5"><span>05</span> Edge split</a>
+            <a href="#part-6"><span>06</span> Loop subdivision</a>
+          </nav>
+        </div>
+      </aside>
 
-			img {
-				display: inline-block;
-			}
+      <article class="article" aria-label="Homework 2 write-up">
+        <section class="section overview" id="overview" aria-labelledby="overview-title">
+          <div class="section-top"><span>00</span><i></i></div>
+          <h2 id="overview-title">Overview</h2>
+          <p class="lead">This homework builds the core operations of a geometric modeler such as evaluating Bézier curves and patches, shading triangle meshes with vertex normals, editing half-edge connectivity, and refining meshes with Loop subdivision.</p>
+          <p>The most interesting lesson was that a surface depends on both its positions and its connectivity. Vertex normals can make a coarse mesh look smooth without changing its geometry, while subdivision actually changes that geometry. A symmetric shape can refine asymmetrically when its triangulation gives equivalent corners different neighborhoods.</p>
+        </section>
 
-			body {
-				font-family: 'Inter', sans-serif;
-			}
-		</style>
-	</head>
-	<body>
-		<div class="container">
-		<h1>CS184/284A Fall 2026 Homework 2 Write-Up</h1>
-		<div style="text-align: center;">Names: </div>
 
-		<br>
+        <section class="section" id="part-1" aria-labelledby="part-1-title">
+          <div class="section-top"><span>01</span><i></i></div>
+          <h2 id="part-1-title">Bézier Curves with<br><em>1D de Casteljau Subdivision</em></h2>
+          <h3>Repeated linear interpolation</h3>
+          <p>De Casteljau’s algorithm evaluates a Bézier curve at a parameter <var>t</var> between 0 and 1. At each level, it interpolates between adjacent points, producing one fewer point than the previous level. Repeating this process until one point remains gives the curve’s value at <var>t</var>.</p>
+          <div class="formula"><span>One evaluation level</span><div>p<sub>i</sub><sup>(k+1)</sup> = (1 − t) p<sub>i</sub><sup>(k)</sup> + t p<sub>i+1</sub><sup>(k)</sup></div></div>
+          <p>In <code>BezierCurve::evaluateStep()</code>, I iterate over neighboring pairs, compute their interpolation, and append each result to a new vector. The function returns that next vector and performs exactly one level. Keeping each level separate allows the viewer to display the construction step by step.</p>
+          <div class="gallery-title"><span>Evaluation sequence</span></div>
+          <div class="gallery two curves">
+<figure class="shot"><div class="shot-image"><a href="assets/part1/step1.png" target="_blank" rel="noopener" aria-label="Open original capture: Level 0 · 6 original controls"><img src="assets/part1/step1.png" alt="De Casteljau level 0, with 6 points in the current level and the completed Bézier curve visible" width="761" height="478" loading="lazy" decoding="async"></a></div><figcaption><b>00</b><div><strong>Level 0 · 6 original controls</strong><small>Six white control points and the completed green degree-five curve.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/step2.png" target="_blank" rel="noopener" aria-label="Open original capture: Level 1 · 5 intermediate points"><img src="assets/part1/step2.png" alt="De Casteljau level 1, with 5 points in the current level and the completed Bézier curve visible" width="786" height="491" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Level 1 · 5 intermediate points</strong><small>Interpolate between adjacent original controls.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/step3.png" target="_blank" rel="noopener" aria-label="Open original capture: Level 2 · 4 intermediate points"><img src="assets/part1/step3.png" alt="De Casteljau level 2, with 4 points in the current level and the completed Bézier curve visible" width="767" height="480" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Level 2 · 4 intermediate points</strong><small>Repeat the same rule on the five-point level.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/step4.png" target="_blank" rel="noopener" aria-label="Open original capture: Level 3 · 3 intermediate points"><img src="assets/part1/step4.png" alt="De Casteljau level 3, with 3 points in the current level and the completed Bézier curve visible" width="746" height="491" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>Level 3 · 3 intermediate points</strong><small>The next level reduces four points to three.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/step5.png" target="_blank" rel="noopener" aria-label="Open original capture: Level 4 · 2 intermediate points"><img src="assets/part1/step5.png" alt="De Casteljau level 4, with 2 points in the current level and the completed Bézier curve visible" width="726" height="485" loading="lazy" decoding="async"></a></div><figcaption><b>04</b><div><strong>Level 4 · 2 intermediate points</strong><small>Two points remain before the final interpolation.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/step6.png" target="_blank" rel="noopener" aria-label="Open original capture: Level 5 · Final evaluated point"><img src="assets/part1/step6.png" alt="De Casteljau level 5, with 1 points in the current level and the completed Bézier curve visible" width="710" height="499" loading="lazy" decoding="async"></a></div><figcaption><b>05</b><div><strong>Level 5 · Final evaluated point</strong><small>The red result lies on the completed green curve.</small></div></figcaption></figure>
+</div>
+          <p class="caption-note">White squares are the original controls, blue squares are intermediate points, and the final red square lies on the green curve.</p>
+          <h3>Moving the controls and changing t</h3>
+          <p>I moved the original controls into a double-dip shape and changed <var>t</var>. Moving controls changes the curve itself. Changing <var>t</var> moves the evaluated point along that curve. The evaluation point move toward the first endpoint as <var>t</var> approaches 0, and toward the last endpoint as it approaches 1.</p>
+          <div class="gallery three curves">
+<figure class="shot"><div class="shot-image"><a href="assets/part1/different%20Bezier%20curve1.png" target="_blank" rel="noopener" aria-label="Open original capture: Modified controls"><img src="assets/part1/different%20Bezier%20curve1.png" alt="Modified six-control-point Bézier curve, capture 1, with intermediate points and a red evaluated point" width="947" height="626" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Modified controls</strong><small>The red evaluation point starts in the middle.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/different%20Bezier%20curve2.png" target="_blank" rel="noopener" aria-label="Open original capture: Changed parameter"><img src="assets/part1/different%20Bezier%20curve2.png" alt="Modified six-control-point Bézier curve, capture 2, with intermediate points and a red evaluated point" width="945" height="630" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Changed parameter</strong><small>The red evaluation point shifts right from the crest.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part1/different%20Bezier%20curve3.png" target="_blank" rel="noopener" aria-label="Open original capture: Further along the curve"><img src="assets/part1/different%20Bezier%20curve3.png" alt="Modified six-control-point Bézier curve, capture 3, with intermediate points and a red evaluated point" width="911" height="623" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>Further along the curve</strong><small>The red point approaches the right-hand dip.</small></div></figcaption></figure>
+</div>
+          <p class="caption-note">In these modified-curve captures, the red point moves from the central crest toward the right-hand dip as the evaluation parameter changes.</p>
+        </section>
 
-		Link to webpage: (TODO) <a href="https://cs184.eecs.berkeley.edu/fa26">cs184.eecs.berkeley.edu/fa26</a>
+        <section class="section" id="part-2" aria-labelledby="part-2-title">
+          <div class="section-top"><span>02</span><i></i></div>
+          <h2 id="part-2-title">Bézier Surfaces with<br><em>Separable 1D de Casteljau</em></h2>
+          <h3>From a curve to a patch</h3>
+          <p>For a grid of 3D control points, I first treat each row as a Bézier curve and evaluate it at <var>u</var>. These row results become the controls for another curve, which I evaluate at <var>v</var>. The final result is the point on the surface at <var>(u, v)</var>.</p>
+          <p>I reused the same interpolation rule in <code>BezierPatch::evaluateStep()</code>, now with 3D vectors and an explicit parameter. <code>evaluate1D()</code> repeatedly applies that step until one point remains. Finally, <code>evaluate()</code> calls the 1D evaluator on every row at <var>u</var>, collects those results, and evaluates that collection at <var>v</var>.</p>
+          <div class="gallery one">
+<figure class="shot"><div class="shot-image"><a href="assets/part2/Bezier%20Teapot.png" target="_blank" rel="noopener" aria-label="Open original capture: bez/teapot.bez"><img src="assets/part2/Bezier%20Teapot.png" alt="Bézier teapot evaluated from bez/teapot.bez, with its dense rendered wireframe visible" width="899" height="623" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>bez/teapot.bez</strong><small>Bézier teapot evaluated with separable 1D de Casteljau.</small></div></figcaption></figure>
+</div>
+        </section>
 
-		<br>
-		
-		Link to GitHub repository: (TODO) <a href="https://cs184.eecs.berkeley.edu/fa26">cs184.eecs.berkeley.edu/fa26</a>
 
-		<figure>
-			<img src="assets/teapot.png" alt="Teapot" style="width:50%"/>
-			<figcaption>You can add images with captions!</figcaption>
-		</figure>
+        <section class="section" id="part-3" aria-labelledby="part-3-title">
+          <div class="section-top"><span>03</span><i></i></div>
+          <h2 id="part-3-title">Area-Weighted<br><em>Vertex Normals</em></h2>
+          <h3>Traversing the one-ring</h3>
+          <p>Starting from a half-edge rooted at the vertex, I visit each incident face by advancing through <code>twin()</code> followed by <code>next()</code>, stopping when I return to the starting half-edge. For each real triangular face, I take its three positions and compute the cross product of two edge vectors.</p>
+          <div class="formula"><span>Area-weighted normal</span><div>n<sub>v</sub> = normalize( Σ<sub>f incident to v</sub> (p<sub>1</sub> − p<sub>0</sub>) × (p<sub>2</sub> − p<sub>0</sub>) )</div></div>
+          <p>The cross product’s magnitude is twice the triangle area, so summing the unnormalized cross products automatically weights larger faces more heavily. I normalize only after summing all contributions.</p>
+          <h3>Flat shading versus Phong shading</h3>
+          <p>Flat shading makes individual triangles visible through abrupt changes in lighting. With area-weighted vertex normals, Phong shading interpolates the normals across triangles and produces a gradual lighting transition across the body, spout, and handle.</p>
+          <div class="gallery two mesh">
+<figure class="shot"><div class="shot-image"><a href="assets/part3/Flat%20Shading.png" target="_blank" rel="noopener" aria-label="Open original capture: Flat shading"><img src="assets/part3/Flat%20Shading.png" alt="Flat-shaded dae/teapot.dae with visible facet-to-facet changes in lighting" width="869" height="488" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Flat shading</strong><small>Face normals reveal individual triangles.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part3/Phong%20shading.png" target="_blank" rel="noopener" aria-label="Open original capture: Phong shading"><img src="assets/part3/Phong%20shading.png" alt="Phong-shaded dae/teapot.dae with smoothly varying lighting and the same wireframe" width="827" height="490" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Phong shading</strong><small>Same model · area-weighted vertex normals smooth the lighting.</small></div></figcaption></figure>
+</div>
+          <p class="caption-note">The wireframe and silhouette remain those of the same mesh. The visible smoothing comes from the normals used for shading.</p>
+        </section>
 
-		<!--
-		We've already added one heading per part, to make your write-up as navigable when grading. Please fit your write-up within these sections!
-		-->
+        <section class="section" id="part-4" aria-labelledby="part-4-title">
+          <div class="section-top"><span>04</span><i></i></div>
+          <h2 id="part-4-title">Edge <em>Flip</em></h2>
+          <h3>Reconnecting two triangles</h3>
+          <p>For an interior edge shared by two triangles, I gather the six local half-edges, four vertices, five edges, and two faces before making any changes. The shared edge is redirected to connect the two opposite vertices. I then use <code>setNeighbors()</code> to assign the next, twin, vertex, edge, and face references for each affected half-edge.</p>
+          <p>I also update the representative half-edge references of the affected vertices, edges, and faces. Boundary edges return unchanged. A flip touches a fixed local neighborhood, takes <code>O(1)</code> work, and creates or deletes no elements.</p>
+          <h3>Keeping the pointers consistent</h3>
+          <p>The important debugging step was labeling all six half-edges and planning their connectivity before updating pointers. Updating the triangle cycles alone was insufficient. The representative vertex half-edges also had to remain rooted at the correct vertices after the diagonal changed. I used complete <code>setNeighbors()</code> assignments and tested consecutive flips to check that later edits could still traverse the mesh.</p>
+          <div class="gallery two mesh">
+<figure class="shot"><div class="shot-image"><a href="assets/part4/before.png" target="_blank" rel="noopener" aria-label="Open original capture: Before edge flips"><img src="assets/part4/before.png" alt="Original teapot mesh before edge flips, showing regular diagonals across the body" width="656" height="368" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Before edge flips</strong><small>The original teapot triangulation.</small></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part4/after.png" target="_blank" rel="noopener" aria-label="Open original capture: After edge flips"><img src="assets/part4/after.png" alt="Teapot mesh after edge flips, with a changed diagonal and triangle shading at the center of the body" width="605" height="343" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>After edge flips</strong><small>The central diagonal arrangement has changed.</small></div></figcaption></figure>
+</div>
+          <p class="caption-note">The changed diagonal is visible near the center of the teapot’s body. Vertex positions and element counts stay fixed, but on a nonplanar patch, changing the diagonal can change the local surface and its shading.</p>
+        </section>
 
-		<h2>Overview</h2>
-		Give a high-level overview of what you implemented in this homework. Think about what you've built as a whole. Share your thoughts on what interesting things you've learned from completing the homework.
+        <section class="section" id="part-5" aria-labelledby="part-5-title">
+          <div class="section-top"><span>05</span><i></i></div>
+          <h2 id="part-5-title">Edge <em>Split</em></h2>
+          <h3>Building the four new triangle cycles</h3>
+          <p>For an interior edge, I gather the original local neighborhood and insert a vertex at the midpoint of the edge’s endpoints. I allocate one new vertex, three new edges, two new faces, and six new half-edges, reusing the existing elements for the rest of the configuration.</p>
+          <div class="formula"><span>Split position</span><div>p<sub>m</sub> = ½ (p<sub>b</sub> + p<sub>c</sub>)</div></div>
+          <p>The midpoint connects to the two opposite vertices, replacing the two original triangles with four. I assign every affected half-edge’s neighbors and refresh the representative references for the vertices, edges, and faces. Boundary edges are left unchanged in this implementation. As with a flip, the amount of local work is <code>O(1)</code>.</p>
+          <h3>Debugging the larger neighborhood</h3>
+          <p>The extra elements made splitting more demanding than flipping. I labeled both the original and new half-edges, then grouped them by the four resulting triangles so that each triangle had an explicit closed cycle. I also made the inserted vertex’s representative half-edge point along a half of the original edge, rather than along a new spoke to an opposite vertex.</p>
+          <p>For subdivision, I distinguish the two halves of the original edge from the newly introduced connecting edges using <code>isNew</code> flags. I tested repeated splits and combinations of splits and flips, since an incomplete pointer update may become visible only when a later operation revisits the neighborhood.</p>
+          <h3>Splits alone, then splits with flips</h3>
+          <div class="gallery three mesh">
+<figure class="shot"><div class="shot-image"><a href="assets/part5/before.png" target="_blank" rel="noopener" aria-label="Open original capture: Before local edits"><img src="assets/part5/before.png" alt="Original teapot mesh used as the baseline before edge splits and edge flips" width="656" height="368" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Before local edits</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part5/edge%20splits.png" target="_blank" rel="noopener" aria-label="Open original capture: After edge splits"><img src="assets/part5/edge%20splits.png" alt="Teapot after edge splits, with additional small triangles in the central edited patch" width="604" height="336" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>After edge splits</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part5/edge%20splits%20and%20edge%20flips.png" target="_blank" rel="noopener" aria-label="Open original capture: After splits and flips"><img src="assets/part5/edge%20splits%20and%20edge%20flips.png" alt="Teapot after combined edge splits and flips, with increased resolution and changed diagonal directions" width="693" height="380" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>After splits and flips</strong></div></figcaption></figure>
+</div>
+          <p>The left capture is the baseline for both comparisons. Splitting adds smaller triangles around the edited region while preserving the existing piecewise planar surface. Combining splits and flips adds resolution and changes the local diagonal arrangement. In the combined capture, this also produces visible changes in the central triangles’ shading.</p>
+        </section>
 
-		<h2>Section I: Bezier Curves and Surfaces</h2>
+        <section class="section final-section" id="part-6" aria-labelledby="part-6-title">
+          <div class="section-top"><span>06</span><i></i></div>
+          <h2 id="part-6-title">Loop Subdivision<br>for <em>Mesh Upsampling</em></h2>
+          <h3>Compute, refine, then commit positions</h3>
+          <p>In <code>MeshResampler::upsample()</code>, I combine the split and flip operations with weighted position updates. I first compute the next positions of the original vertices and the vertices that will be inserted along the original edges. Those values are stored in <code>Vertex::newPosition</code> and <code>Edge::newPosition</code>, while the current mesh positions remain unchanged.</p>
+          <div class="formula"><span>Interior edge rule</span><div>p<sub>edge</sub> = ⅜ (A + B) + ⅛ (C + D)</div></div>
+          <p>Here, A and B are the edge endpoints, and C and D are the opposite vertices in its two incident triangles. An original vertex moves according to its degree <var>n</var> and the positions of its original neighbors:</p>
+          <div class="formula"><span>Original vertex rule</span><div>p′ = (1 − nβ) p + β Σ<sub>neighbors</sub> p<sub>j</sub><small>β = 3/16 for n = 3; otherwise β = 3/(8n).</small></div></div>
+          <ol class="process-list">
+            <li><strong>Cache the coarse-mesh positions.</strong><span>Compute every weighted update from the original mesh, before changing connectivity or positions.</span></li>
+            <li><strong>Split every original edge once.</strong><span>I save the original edges in a separate vector so newly created edges are not split again during the same pass. Each inserted vertex receives its edge’s cached position.</span></li>
+            <li><strong>Flip the appropriate new edges.</strong><span>Flip new connecting edges with one old and one new endpoint. The two halves of an original edge are retained.</span></li>
+            <li><strong>Apply the cached positions.</strong><span>After connectivity is complete, assign the stored positions to all vertices. Each original triangle has become four triangles.</span></li>
+          </ol>
+          <p>Saving the original edge list and maintaining the <code>isNew</code> flags were the key bookkeeping details. Updating positions in place too early would mix old and new geometry in later weighted averages, making the result depend on traversal order.</p>
 
-		<h3>Part 1: Bezier curves with 1D de Casteljau subdivision</h3>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+          <h3>What happens to sharp features?</h3>
+          <p>The torus sequences show the angular ring becoming progressively rounder as its triangles become denser. The outer corners and the corners around the hole soften because the position updates average each vertex with its neighbors. The geometry also contracts toward a smoother limit surface.</p>
+          <p>I pre-split the torus’s outer-ring edges to retain more of its hexagonal outline. Those added vertices change the neighborhoods used by the weighted averages. Compared with the unsplit ring, the pre-split sequence retains a clearer six-sided tendency, while both versions become smoother. The splits reduce the rounding of the outer silhouette, but standard Loop subdivision still smooths the surface rather than preserving a perfectly sharp crease.</p>
+          <div class="gallery-title"><span>Torus</span></div>
+          <div class="sequence"><div class="sequence-header"><span>No preprocessing</span><span>Outer-ring splits</span></div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20no%20split/1.png" target="_blank" rel="noopener" aria-label="Open original capture: Original mesh · no preprocessing"><img src="assets/part6/torus%20no%20split/1.png" alt="Torus original mesh, no preprocessing, showing the silhouette and triangle wireframe" width="454" height="459" loading="lazy" decoding="async"></a></div><figcaption><b>00</b><div><strong>Original mesh · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20with%20split/1.png" target="_blank" rel="noopener" aria-label="Open original capture: Original mesh · outer-ring splits"><img src="assets/part6/torus%20with%20split/1.png" alt="Torus original mesh, outer-ring splits, showing the silhouette and triangle wireframe" width="454" height="461" loading="lazy" decoding="async"></a></div><figcaption><b>00</b><div><strong>Original mesh · outer-ring splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20no%20split/2.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 1 · no preprocessing"><img src="assets/part6/torus%20no%20split/2.png" alt="Torus subdivision 1, no preprocessing, showing the silhouette and triangle wireframe" width="416" height="403" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Subdivision 1 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20with%20split/2.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 1 · outer-ring splits"><img src="assets/part6/torus%20with%20split/2.png" alt="Torus subdivision 1, outer-ring splits, showing the silhouette and triangle wireframe" width="433" height="402" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Subdivision 1 · outer-ring splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20no%20split/3.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 2 · no preprocessing"><img src="assets/part6/torus%20no%20split/3.png" alt="Torus subdivision 2, no preprocessing, showing the silhouette and triangle wireframe" width="435" height="390" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Subdivision 2 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20with%20split/3.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 2 · outer-ring splits"><img src="assets/part6/torus%20with%20split/3.png" alt="Torus subdivision 2, outer-ring splits, showing the silhouette and triangle wireframe" width="424" height="411" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Subdivision 2 · outer-ring splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20no%20split/4.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 3 · no preprocessing"><img src="assets/part6/torus%20no%20split/4.png" alt="Torus subdivision 3, no preprocessing, showing the silhouette and triangle wireframe" width="433" height="391" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>Subdivision 3 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20with%20split/4.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 3 · outer-ring splits"><img src="assets/part6/torus%20with%20split/4.png" alt="Torus subdivision 3, outer-ring splits, showing the silhouette and triangle wireframe" width="407" height="397" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>Subdivision 3 · outer-ring splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20no%20split/5.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 4 · no preprocessing"><img src="assets/part6/torus%20no%20split/5.png" alt="Torus subdivision 4, no preprocessing, showing the silhouette and triangle wireframe" width="418" height="388" loading="lazy" decoding="async"></a></div><figcaption><b>04</b><div><strong>Subdivision 4 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/torus%20with%20split/5.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 4 · outer-ring splits"><img src="assets/part6/torus%20with%20split/5.png" alt="Torus subdivision 4, outer-ring splits, showing the silhouette and triangle wireframe" width="483" height="413" loading="lazy" decoding="async"></a></div><figcaption><b>04</b><div><strong>Subdivision 4 · outer-ring splits</strong></div></figcaption></figure>
+</div>
+</div>
 
-		<p>Here is an example 2x2 gridlike structure using an HTML table. Each <b>tr</b> is a row and each <b>td</b> is a column in that row. You might find this useful for framing and showing your result images in an organized fashion.</p>
-		<div style="display: flex; flex-direction: column; align-items: center;">
-			<table style="width: 100%; text-align: center; border-collapse: collapse;">
-			  <tr>
-				<td style="text-align: center;">
-				  <img src="assets/teapot.png" width="400px"/>
-				  <figcaption>Caption goes here.</figcaption>
-				</td>
-				<td style="text-align: center;">
-				  <img src="assets/teapot.png" width="400px"/>
-				  <figcaption>Caption goes here.</figcaption>
-				</td>
-			  </tr>
-			  <tr>
-				<td style="text-align: center;">
-				  <img src="assets/teapot.png" width="400px"/>
-				  <figcaption>Caption goes here.</figcaption>
-				</td>
-				<td style="text-align: center;">
-				  <img src="assets/teapot.png" width="400px"/>
-				  <figcaption>Caption goes here.</figcaption>
-				</td>
-			  </tr>
-			</table>
-		</div>
+          <h3>Why does a symmetric cube become asymmetric?</h3>
+          <p>A cube’s positions are symmetric, but a diagonal on each square face selects one pair of opposite corners. Across the cube, those choices can give geometrically equivalent corners different vertex degrees or different neighbor arrangements. Loop subdivision uses both, so those corners need not receive equivalent weighted updates.</p>
+          <p>In the unprocessed sequence, the first refinement already has a visibly uneven outline in this face-on view. Further refinements smooth the surface, but retain the bias inherited from the original triangulation. Increasing the resolution alone does not remove that difference.</p>
+          <h3>Making the starting triangulation symmetric</h3>
+          <p>I split the diagonal on all six faces of the cube. Each split inserts a face-center vertex and replaces the two face triangles with four. This removes the privileged face-diagonal direction. Each original cube corner is then connected to its three neighboring corners and the centers of its three adjacent faces, giving all eight corners degree six with equivalent neighborhoods.</p>
+          <p>This symmetric connectivity makes equivalent corners receive symmetric position updates. The pre-split screenshots show a more balanced rounded-square outline through the refinement sequence. Corners still soften because the Loop rules remain smoothing rules; preprocessing addresses the triangulation bias rather than locking the cube’s sharp edges.</p>
+          <div class="gallery-title"><span>Cube</span></div>
+          <div class="sequence"><div class="sequence-header"><span>No preprocessing</span><span>Face-diagonal splits</span></div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20no%20split/1.png" target="_blank" rel="noopener" aria-label="Open original capture: Original mesh · no preprocessing"><img src="assets/part6/cube%20no%20split/1.png" alt="Cube original mesh, no preprocessing, showing the silhouette and triangle wireframe" width="474" height="457" loading="lazy" decoding="async"></a></div><figcaption><b>00</b><div><strong>Original mesh · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20with%20split/1.png" target="_blank" rel="noopener" aria-label="Open original capture: Original mesh · face-diagonal splits"><img src="assets/part6/cube%20with%20split/1.png" alt="Cube original mesh, face-diagonal splits, showing the silhouette and triangle wireframe" width="491" height="471" loading="lazy" decoding="async"></a></div><figcaption><b>00</b><div><strong>Original mesh · face-diagonal splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20no%20split/2.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 1 · no preprocessing"><img src="assets/part6/cube%20no%20split/2.png" alt="Cube subdivision 1, no preprocessing, showing the silhouette and triangle wireframe" width="425" height="410" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Subdivision 1 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20with%20split/2.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 1 · face-diagonal splits"><img src="assets/part6/cube%20with%20split/2.png" alt="Cube subdivision 1, face-diagonal splits, showing the silhouette and triangle wireframe" width="450" height="419" loading="lazy" decoding="async"></a></div><figcaption><b>01</b><div><strong>Subdivision 1 · face-diagonal splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20no%20split/3.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 2 · no preprocessing"><img src="assets/part6/cube%20no%20split/3.png" alt="Cube subdivision 2, no preprocessing, showing the silhouette and triangle wireframe" width="402" height="381" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Subdivision 2 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20with%20split/3.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 2 · face-diagonal splits"><img src="assets/part6/cube%20with%20split/3.png" alt="Cube subdivision 2, face-diagonal splits, showing the silhouette and triangle wireframe" width="471" height="422" loading="lazy" decoding="async"></a></div><figcaption><b>02</b><div><strong>Subdivision 2 · face-diagonal splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20no%20split/4.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 3 · no preprocessing"><img src="assets/part6/cube%20no%20split/4.png" alt="Cube subdivision 3, no preprocessing, showing the silhouette and triangle wireframe" width="391" height="376" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>Subdivision 3 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20with%20split/4.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 3 · face-diagonal splits"><img src="assets/part6/cube%20with%20split/4.png" alt="Cube subdivision 3, face-diagonal splits, showing the silhouette and triangle wireframe" width="453" height="410" loading="lazy" decoding="async"></a></div><figcaption><b>03</b><div><strong>Subdivision 3 · face-diagonal splits</strong></div></figcaption></figure>
+</div>
+<div class="gallery two">
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20no%20split/5.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 4 · no preprocessing"><img src="assets/part6/cube%20no%20split/5.png" alt="Cube subdivision 4, no preprocessing, showing the silhouette and triangle wireframe" width="395" height="379" loading="lazy" decoding="async"></a></div><figcaption><b>04</b><div><strong>Subdivision 4 · no preprocessing</strong></div></figcaption></figure>
+<figure class="shot"><div class="shot-image"><a href="assets/part6/cube%20with%20split/5.png" target="_blank" rel="noopener" aria-label="Open original capture: Subdivision 4 · face-diagonal splits"><img src="assets/part6/cube%20with%20split/5.png" alt="Cube subdivision 4, face-diagonal splits, showing the silhouette and triangle wireframe" width="454" height="412" loading="lazy" decoding="async"></a></div><figcaption><b>04</b><div><strong>Subdivision 4 · face-diagonal splits</strong></div></figcaption></figure>
+</div>
+</div>
+        </section>
+      </article>
+    </div>
+  </main>
 
-		<h3>Part 2: Bezier surfaces with separable 1D de Casteljau</h3>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-		<h2>Section II: Triangle Meshes and Half-Edge Data Structure</h2>
-
-		<h3>Part 3: Area-weighted vertex normals</h3>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-		<h3>Part 4: Edge flip</h3>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-		<h3>Part 5: Edge split</h3>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-		<h3>Part 6: Loop subdivision for mesh upsampling</h3>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-		<h2>(Optional) Section III: Potential Extra Credit - Art Competition: Model something Creative</h2>
-		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-
-		<h2>Additional Notes (please remove)</h2>
-		<ul>
-			<li>You can also add code if you'd like as so: <code>code code code</code></li>
-			<li>If you'd like to add math equations, 
-				<ul>
-					<li>You can write inline equations like so: \( a^2 + b^2 = c^2 \)</li>
-					<li>You can write display equations like so: \[ a^2 + b^2 = c^2 \]</li>
-				</ul>
-			</li>
-		</ul>
-		</div>
-	</body>
+  <footer class="site-footer">
+    <div><span class="footer-monogram">IY.</span><p>Ian Yang · UC Berkeley<br>CS 184 / Computer Graphics &amp; Imaging · Fall 2026</p></div>
+    <nav aria-label="Footer navigation"><a href="#top">Back to top ↑</a></nav>
+  </footer>
+</body>
 </html>
